@@ -50,7 +50,15 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 Adafruit_LIS3DH accel = Adafruit_LIS3DH();
 
-enum class RenderMode { ScrollLeft, ScrollRight, Clear, Test, Test2, Test3 };
+enum class RenderMode {
+  ScrollLeft,
+  ScrollRight,
+  Clear,
+  Test,
+  Test2,
+  Test3,
+  Test4
+};
 
 RenderMode renderMode = RenderMode::ScrollLeft;
 String currentText = "GIMLI";
@@ -73,6 +81,17 @@ bool test3Falling = false;
 float lastAx = 0.0F;
 float lastAy = 0.0F;
 float lastAz = 0.0F;
+
+bool test4Moving = false;
+bool test4HasLastAccel = false;
+uint32_t lastTest4AccelMs = 0;
+float test4LastAx = 0.0F;
+float test4LastAy = 0.0F;
+float test4LastAz = 0.0F;
+float test4OffsetX = 0.0F;
+float test4OffsetY = 0.0F;
+float test4VelX = 0.0F;
+float test4VelY = 0.0F;
 
 struct BlockTemplate {
   int16_t x;
@@ -106,6 +125,28 @@ struct LiveBlock {
 
 LiveBlock test3Blocks[TEST3_BLOCK_COUNT];
 
+constexpr float TEST4_TRIGGER_DELTA_MS2 = 6.0F;
+constexpr float TEST4_SIGNIFICANT_DELTA_MS2 = 1.4F;
+constexpr float TEST4_IMPULSE_SCALE = 0.22F;
+constexpr float TEST4_TILT_SCALE = 0.015F;
+constexpr float TEST4_DRAG_ACTIVE = 0.94F;
+constexpr float TEST4_DRAG_IDLE = 0.85F;
+constexpr float TEST4_STOP_EPSILON = 0.03F;
+
+struct PatternBlock {
+  int16_t x;
+  int16_t y;
+  int16_t w;
+  int16_t h;
+  uint16_t color;
+};
+
+constexpr int16_t TEST4_TILE_W = 16;
+constexpr int16_t TEST4_TILE_H = 16;
+constexpr uint8_t TEST4_PATTERN_COUNT = 9;
+
+PatternBlock test4Pattern[TEST4_PATTERN_COUNT];
+
 void initTest3Blocks() {
   for (uint8_t i = 0; i < TEST3_BLOCK_COUNT; ++i) {
     const BlockTemplate& src = kTest3Template[i];
@@ -117,6 +158,31 @@ void initTest3Blocks() {
     test3Blocks[i].h = src.h;
     test3Blocks[i].color = matrix.color565(src.r, src.g, src.b);
   }
+}
+
+void initTest4Pattern() {
+  // Intentionally varied 1-3px spacing between blocks; no initial touching.
+  test4Pattern[0] = {0, 0, 3, 3, matrix.color565(255, 120, 120)};
+  test4Pattern[1] = {4, 0, 2, 3, matrix.color565(120, 220, 255)};
+  test4Pattern[2] = {8, 0, 5, 3, matrix.color565(255, 210, 120)};
+
+  test4Pattern[3] = {0, 5, 2, 3, matrix.color565(180, 255, 140)};
+  test4Pattern[4] = {4, 5, 4, 3, matrix.color565(220, 140, 255)};
+  test4Pattern[5] = {10, 5, 3, 3, matrix.color565(120, 255, 220)};
+
+  test4Pattern[6] = {0, 10, 6, 4, matrix.color565(255, 150, 120)};
+  test4Pattern[7] = {8, 10, 2, 4, matrix.color565(150, 180, 255)};
+  test4Pattern[8] = {12, 10, 3, 4, matrix.color565(140, 255, 180)};
+}
+
+void resetTest4Motion() {
+  test4Moving = false;
+  test4HasLastAccel = false;
+  test4OffsetX = 0.0F;
+  test4OffsetY = 0.0F;
+  test4VelX = 0.0F;
+  test4VelY = 0.0F;
+  lastTest4AccelMs = 0;
 }
 
 void updateTest3Physics() {
@@ -171,6 +237,84 @@ void updateTest3Physics() {
   lastAx = ax;
   lastAy = ay;
   lastAz = az;
+}
+
+void updateTest4Motion() {
+  if (!accelReady) {
+    return;
+  }
+
+  uint32_t now = millis();
+  if ((now - lastTest4AccelMs) < ACCEL_SAMPLE_MS) {
+    return;
+  }
+  lastTest4AccelMs = now;
+
+  sensors_event_t event;
+  accel.getEvent(&event);
+
+  float ax = event.acceleration.x;
+  float ay = event.acceleration.y;
+  float az = event.acceleration.z;
+
+  if (!test4HasLastAccel) {
+    test4HasLastAccel = true;
+    test4LastAx = ax;
+    test4LastAy = ay;
+    test4LastAz = az;
+    return;
+  }
+
+  float dax = ax - test4LastAx;
+  float day = ay - test4LastAy;
+  float daz = az - test4LastAz;
+  float deltaMag = sqrtf(dax * dax + day * day + daz * daz);
+
+  if (!test4Moving && deltaMag >= TEST4_TRIGGER_DELTA_MS2) {
+    test4Moving = true;
+    test4VelX += dax * TEST4_IMPULSE_SCALE;
+    test4VelY += day * TEST4_IMPULSE_SCALE;
+    Serial.printf("test4 motion trigger delta=%.2f\n", deltaMag);
+  }
+
+  if (test4Moving) {
+    if (deltaMag >= TEST4_SIGNIFICANT_DELTA_MS2) {
+      test4VelX += dax * TEST4_IMPULSE_SCALE + ax * TEST4_TILT_SCALE;
+      test4VelY += day * TEST4_IMPULSE_SCALE + ay * TEST4_TILT_SCALE;
+      test4VelX *= TEST4_DRAG_ACTIVE;
+      test4VelY *= TEST4_DRAG_ACTIVE;
+    } else {
+      test4VelX *= TEST4_DRAG_IDLE;
+      test4VelY *= TEST4_DRAG_IDLE;
+    }
+
+    if (fabsf(test4VelX) < TEST4_STOP_EPSILON &&
+        fabsf(test4VelY) < TEST4_STOP_EPSILON) {
+      test4VelX = 0.0F;
+      test4VelY = 0.0F;
+      test4Moving = false;
+    }
+
+    test4OffsetX += test4VelX;
+    test4OffsetY += test4VelY;
+
+    while (test4OffsetX >= TEST4_TILE_W) {
+      test4OffsetX -= TEST4_TILE_W;
+    }
+    while (test4OffsetX < 0.0F) {
+      test4OffsetX += TEST4_TILE_W;
+    }
+    while (test4OffsetY >= TEST4_TILE_H) {
+      test4OffsetY -= TEST4_TILE_H;
+    }
+    while (test4OffsetY < 0.0F) {
+      test4OffsetY += TEST4_TILE_H;
+    }
+  }
+
+  test4LastAx = ax;
+  test4LastAy = ay;
+  test4LastAz = az;
 }
 
 void recalcTextMetrics() {
@@ -245,6 +389,14 @@ void handleTextEvent(const JsonDocument& doc) {
     hasLastAccel = false;
     initTest3Blocks();
     Serial.println("test3");
+    return;
+  }
+
+  if (strcmp(event, "test4") == 0) {
+    renderMode = RenderMode::Test4;
+    testStartedMs = millis();
+    resetTest4Motion();
+    Serial.println("test4");
     return;
   }
 
@@ -429,11 +581,37 @@ void renderTest3Pattern() {
   matrix.show();
 }
 
+void renderTest4Pattern() {
+  updateTest4Motion();
+  matrix.fillScreen(0);
+
+  int16_t offsetX = static_cast<int16_t>(test4OffsetX + 0.5F);
+  int16_t offsetY = static_cast<int16_t>(test4OffsetY + 0.5F);
+
+  for (int16_t tileY = -offsetY - TEST4_TILE_H;
+       tileY < MATRIX_HEIGHT + TEST4_TILE_H; tileY += TEST4_TILE_H) {
+    for (int16_t tileX = -offsetX - TEST4_TILE_W;
+         tileX < MATRIX_WIDTH + TEST4_TILE_W; tileX += TEST4_TILE_W) {
+      for (uint8_t i = 0; i < TEST4_PATTERN_COUNT; ++i) {
+        const PatternBlock& p = test4Pattern[i];
+        matrix.fillRect(tileX + p.x, tileY + p.y, p.w, p.h, p.color);
+      }
+    }
+  }
+
+  matrix.show();
+}
+
 void renderFrameIfDue() {
   uint32_t now = millis();
 
+  bool test4StillMoving = test4Moving ||
+                          fabsf(test4VelX) >= TEST4_STOP_EPSILON ||
+                          fabsf(test4VelY) >= TEST4_STOP_EPSILON;
+
   if ((renderMode == RenderMode::Test || renderMode == RenderMode::Test2 ||
-       renderMode == RenderMode::Test3) &&
+       renderMode == RenderMode::Test3 ||
+       (renderMode == RenderMode::Test4 && !test4StillMoving)) &&
       (now - testStartedMs) >= TEST_DURATION_MS) {
     renderMode = RenderMode::Clear;
     Serial.println("test complete (30s)");
@@ -463,6 +641,9 @@ void renderFrameIfDue() {
     case RenderMode::Test3:
       renderTest3Pattern();
       break;
+    case RenderMode::Test4:
+      renderTest4Pattern();
+      break;
   }
 }
 
@@ -491,6 +672,7 @@ void setup() {
 
   recalcTextMetrics();
   initTest3Blocks();
+  initTest4Pattern();
   renderScrollLeft();
 
   WiFi.mode(WIFI_STA);

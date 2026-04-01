@@ -147,6 +147,12 @@ Run test3 (multicolor block sizes):
 mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"test3"}'
 ```
 
+Run test4 (infinite tiled blocks with gyro motion):
+
+```bash
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"test4"}'
+```
+
 ## Build
 
 Built with PlatformIO using:
