@@ -1,4 +1,6 @@
+#include <Adafruit_LIS3DH.h>
 #include <Adafruit_Protomatter.h>
+#include <Adafruit_Sensor.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
@@ -18,6 +20,11 @@ constexpr uint16_t FRAME_MS_DEFAULT = 30;
 constexpr uint16_t FRAME_MS_MIN = 10;
 constexpr uint16_t FRAME_MS_MAX = 200;
 constexpr uint32_t TEST_DURATION_MS = 30000;
+constexpr uint32_t ACCEL_SAMPLE_MS = 40;
+constexpr float FALL_TRIGGER_DELTA_MS2 = 6.0F;
+constexpr float FALL_TILT_SCALE = 0.010F;
+constexpr float FALL_BASE_GRAVITY = 0.030F;
+constexpr float FALL_DRAG = 0.985F;
 
 constexpr uint32_t WIFI_RETRY_MS = 1000;
 constexpr uint32_t MQTT_RETRY_MS = 3000;
@@ -41,6 +48,7 @@ Adafruit_Protomatter matrix(MATRIX_WIDTH, 4, 1, rgbPins, kNumAddrPins, addrPins,
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
+Adafruit_LIS3DH accel = Adafruit_LIS3DH();
 
 enum class RenderMode { ScrollLeft, ScrollRight, Clear, Test, Test2, Test3 };
 
@@ -57,6 +65,123 @@ uint32_t lastFrameMs = 0;
 uint32_t lastWifiAttemptMs = 0;
 uint32_t lastMqttAttemptMs = 0;
 uint32_t testStartedMs = 0;
+uint32_t lastAccelSampleMs = 0;
+
+bool accelReady = false;
+bool hasLastAccel = false;
+bool test3Falling = false;
+float lastAx = 0.0F;
+float lastAy = 0.0F;
+float lastAz = 0.0F;
+
+struct BlockTemplate {
+  int16_t x;
+  int16_t y;
+  int16_t w;
+  int16_t h;
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+};
+
+constexpr uint8_t TEST3_BLOCK_COUNT = 11;
+const BlockTemplate kTest3Template[TEST3_BLOCK_COUNT] = {
+    {0, 0, 7, 4, 255, 80, 80},     {9, 1, 4, 3, 90, 220, 120},
+    {15, 0, 6, 5, 80, 140, 255},   {23, 2, 8, 4, 255, 180, 60},
+    {1, 6, 5, 6, 190, 100, 255},   {8, 6, 9, 3, 80, 230, 210},
+    {19, 7, 4, 7, 255, 90, 200},   {24, 8, 7, 3, 255, 255, 110},
+    {6, 11, 10, 4, 110, 170, 255}, {18, 12, 5, 3, 255, 120, 120},
+    {24, 12, 8, 4, 120, 255, 150},
+};
+
+struct LiveBlock {
+  float x;
+  float y;
+  float vx;
+  float vy;
+  int16_t w;
+  int16_t h;
+  uint16_t color;
+  bool active;
+};
+
+LiveBlock test3Blocks[TEST3_BLOCK_COUNT];
+
+void initTest3Blocks() {
+  for (uint8_t i = 0; i < TEST3_BLOCK_COUNT; ++i) {
+    const BlockTemplate& src = kTest3Template[i];
+    test3Blocks[i].x = static_cast<float>(src.x);
+    test3Blocks[i].y = static_cast<float>(src.y);
+    test3Blocks[i].vx = 0.0F;
+    test3Blocks[i].vy = 0.0F;
+    test3Blocks[i].w = src.w;
+    test3Blocks[i].h = src.h;
+    test3Blocks[i].color = matrix.color565(src.r, src.g, src.b);
+    test3Blocks[i].active = true;
+  }
+}
+
+void updateTest3Physics() {
+  if (!accelReady) {
+    return;
+  }
+
+  uint32_t now = millis();
+  if ((now - lastAccelSampleMs) < ACCEL_SAMPLE_MS) {
+    return;
+  }
+  lastAccelSampleMs = now;
+
+  sensors_event_t event;
+  accel.getEvent(&event);
+
+  float ax = event.acceleration.x;
+  float ay = event.acceleration.y;
+  float az = event.acceleration.z;
+
+  if (!hasLastAccel) {
+    hasLastAccel = true;
+    lastAx = ax;
+    lastAy = ay;
+    lastAz = az;
+    return;
+  }
+
+  float dax = ax - lastAx;
+  float day = ay - lastAy;
+  float daz = az - lastAz;
+  float deltaMag = sqrtf(dax * dax + day * day + daz * daz);
+
+  if (!test3Falling && deltaMag >= FALL_TRIGGER_DELTA_MS2) {
+    test3Falling = true;
+    Serial.printf("test3 fall trigger delta=%.2f\n", deltaMag);
+  }
+
+  if (test3Falling) {
+    for (uint8_t i = 0; i < TEST3_BLOCK_COUNT; ++i) {
+      LiveBlock& b = test3Blocks[i];
+      if (!b.active) {
+        continue;
+      }
+
+      b.vx += ax * FALL_TILT_SCALE;
+      b.vy += ay * FALL_TILT_SCALE + FALL_BASE_GRAVITY;
+      b.vx *= FALL_DRAG;
+      b.vy *= FALL_DRAG;
+      b.x += b.vx;
+      b.y += b.vy;
+
+      if ((b.x + b.w) < 0.0F || b.x >= MATRIX_WIDTH || (b.y + b.h) < 0.0F ||
+          b.y >= MATRIX_HEIGHT) {
+        b.active = false;
+      }
+    }
+  }
+
+  lastAx = ax;
+  lastAy = ay;
+  lastAz = az;
+}
 
 void recalcTextMetrics() {
   int16_t x1 = 0;
@@ -126,6 +251,9 @@ void handleTextEvent(const JsonDocument& doc) {
   if (strcmp(event, "test3") == 0) {
     renderMode = RenderMode::Test3;
     testStartedMs = millis();
+    test3Falling = false;
+    hasLastAccel = false;
+    initTest3Blocks();
     Serial.println("test3");
     return;
   }
@@ -298,36 +426,21 @@ void renderTest2Pattern() {
 }
 
 void renderTest3Pattern() {
-  static uint8_t phase = 0;
+  updateTest3Physics();
   matrix.fillScreen(0);
 
-  constexpr uint8_t kBlockCount = 12;
-  for (uint8_t i = 0; i < kBlockCount; ++i) {
-    uint8_t mix = static_cast<uint8_t>(phase * 13U + i * 29U);
-
-    int16_t w = static_cast<int16_t>(2 + (mix % 8));
-    int16_t h = static_cast<int16_t>(2 + ((mix / 3U) % 6));
-
-    int16_t maxX = static_cast<int16_t>(MATRIX_WIDTH - w);
-    int16_t maxY = static_cast<int16_t>(MATRIX_HEIGHT - h);
-    if (maxX < 0 || maxY < 0) {
+  for (uint8_t i = 0; i < TEST3_BLOCK_COUNT; ++i) {
+    const LiveBlock& b = test3Blocks[i];
+    if (!b.active) {
       continue;
     }
 
-    int16_t x = static_cast<int16_t>((phase * 5U + i * 7U) %
-                                     static_cast<uint8_t>(maxX + 1));
-    int16_t y = static_cast<int16_t>((phase * 3U + i * 11U) %
-                                     static_cast<uint8_t>(maxY + 1));
-
-    uint8_t r = static_cast<uint8_t>((50U + mix * 3U) & 0xFF);
-    uint8_t g = static_cast<uint8_t>((120U + mix * 5U) & 0xFF);
-    uint8_t b = static_cast<uint8_t>((200U + mix * 7U) & 0xFF);
-
-    matrix.fillRect(x, y, w, h, matrix.color565(r, g, b));
+    int16_t x = static_cast<int16_t>(b.x + 0.5F);
+    int16_t y = static_cast<int16_t>(b.y + 0.5F);
+    matrix.fillRect(x, y, b.w, b.h, b.color);
   }
 
   matrix.show();
-  phase = static_cast<uint8_t>((phase + 1U) % 96U);
 }
 
 void renderFrameIfDue() {
@@ -382,7 +495,16 @@ void setup() {
     }
   }
 
+  if (accel.begin(0x19)) {
+    accelReady = true;
+    accel.setRange(LIS3DH_RANGE_4_G);
+    Serial.println("LIS3DH ready at 0x19");
+  } else {
+    Serial.println("LIS3DH not detected at 0x19 (test3 will remain static)");
+  }
+
   recalcTextMetrics();
+  initTest3Blocks();
   renderScrollLeft();
 
   WiFi.mode(WIFI_STA);
