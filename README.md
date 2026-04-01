@@ -135,6 +135,12 @@ Run test pattern:
 mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"test"}'
 ```
 
+Run test2 (wild mode):
+
+```bash
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"test2"}'
+```
+
 ## Build
 
 Built with PlatformIO using:

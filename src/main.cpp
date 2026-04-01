@@ -17,6 +17,7 @@ constexpr char MQTT_CLIENT_ID[] = "gimli-matrixportal";
 constexpr uint16_t FRAME_MS_DEFAULT = 30;
 constexpr uint16_t FRAME_MS_MIN = 10;
 constexpr uint16_t FRAME_MS_MAX = 200;
+constexpr uint32_t TEST_DURATION_MS = 30000;
 
 constexpr uint32_t WIFI_RETRY_MS = 1000;
 constexpr uint32_t MQTT_RETRY_MS = 3000;
@@ -41,7 +42,7 @@ Adafruit_Protomatter matrix(MATRIX_WIDTH, 4, 1, rgbPins, kNumAddrPins, addrPins,
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
-enum class RenderMode { ScrollLeft, ScrollRight, Clear, Test };
+enum class RenderMode { ScrollLeft, ScrollRight, Clear, Test, Test2 };
 
 RenderMode renderMode = RenderMode::ScrollLeft;
 String currentText = "GIMLI";
@@ -55,6 +56,7 @@ uint16_t textColor = 0xFFFF;
 uint32_t lastFrameMs = 0;
 uint32_t lastWifiAttemptMs = 0;
 uint32_t lastMqttAttemptMs = 0;
+uint32_t testStartedMs = 0;
 
 void recalcTextMetrics() {
   int16_t x1 = 0;
@@ -109,7 +111,15 @@ void handleTextEvent(const JsonDocument& doc) {
 
   if (strcmp(event, "test") == 0) {
     renderMode = RenderMode::Test;
+    testStartedMs = millis();
     Serial.println("test");
+    return;
+  }
+
+  if (strcmp(event, "test2") == 0) {
+    renderMode = RenderMode::Test2;
+    testStartedMs = millis();
+    Serial.println("test2");
     return;
   }
 
@@ -183,7 +193,8 @@ void renderScrollLeft() {
 
   textX -= 1;
   if (textX < -static_cast<int16_t>(textWidth)) {
-    textX = MATRIX_WIDTH;
+    renderMode = RenderMode::Clear;
+    Serial.println("render_text complete");
   }
 }
 
@@ -198,7 +209,8 @@ void renderScrollRight() {
 
   textX += 1;
   if (textX > static_cast<int16_t>(MATRIX_WIDTH)) {
-    textX = -static_cast<int16_t>(textWidth);
+    renderMode = RenderMode::Clear;
+    Serial.println("render_text complete");
   }
 }
 
@@ -206,26 +218,87 @@ void renderTestPattern() {
   static uint8_t phase = 0;
   matrix.fillScreen(0);
 
-  for (int16_t x = 0; x < MATRIX_WIDTH; ++x) {
-    uint8_t section = static_cast<uint8_t>((x + phase) / 4U) % 3U;
-    uint16_t color = 0;
-    if (section == 0) {
-      color = matrix.color565(255, 0, 0);
-    } else if (section == 1) {
-      color = matrix.color565(0, 255, 0);
-    } else {
-      color = matrix.color565(0, 0, 255);
-    }
+  bool rowsMode = (millis() - testStartedMs) >= (TEST_DURATION_MS / 2U);
 
-    matrix.drawLine(x, 0, x, MATRIX_HEIGHT - 1, color);
+  if (!rowsMode) {
+    for (int16_t x = 0; x < MATRIX_WIDTH; ++x) {
+      uint8_t section = static_cast<uint8_t>((x + phase) / 4U) % 3U;
+      uint16_t color = 0;
+      if (section == 0) {
+        color = matrix.color565(255, 0, 0);
+      } else if (section == 1) {
+        color = matrix.color565(0, 255, 0);
+      } else {
+        color = matrix.color565(0, 0, 255);
+      }
+
+      matrix.drawLine(x, 0, x, MATRIX_HEIGHT - 1, color);
+    }
+  } else {
+    for (int16_t y = 0; y < MATRIX_HEIGHT; ++y) {
+      uint8_t section = static_cast<uint8_t>((y + phase) / 2U) % 3U;
+      uint16_t color = 0;
+      if (section == 0) {
+        color = matrix.color565(255, 100, 0);
+      } else if (section == 1) {
+        color = matrix.color565(0, 180, 255);
+      } else {
+        color = matrix.color565(220, 0, 255);
+      }
+
+      matrix.drawLine(0, y, MATRIX_WIDTH - 1, y, color);
+    }
   }
 
   matrix.show();
-  phase = static_cast<uint8_t>((phase + 1U) % 12U);
+  phase = static_cast<uint8_t>((phase + 1U) % 24U);
+}
+
+void renderTest2Pattern() {
+  static uint8_t phase = 0;
+  matrix.fillScreen(0);
+
+  for (int16_t y = 0; y < MATRIX_HEIGHT; ++y) {
+    for (int16_t x = 0; x < MATRIX_WIDTH; ++x) {
+      // Only light a subset of pixels to keep plenty of negative space.
+      uint8_t gate = static_cast<uint8_t>((x + (phase / 2U)) % 5U);
+      uint8_t band = static_cast<uint8_t>((y + phase) % 4U);
+      bool lit = (gate == 0U) && (band <= 1U);
+      if (!lit) {
+        continue;
+      }
+
+      uint8_t v =
+          static_cast<uint8_t>(((x * 17) ^ (y * 29) ^ (phase * 11)) & 0xFF);
+      uint8_t r = static_cast<uint8_t>((v + (phase * 5U)) & 0xFF);
+      uint8_t g = static_cast<uint8_t>((180U + v / 3U) & 0xFF);
+      uint8_t b = static_cast<uint8_t>((255U - v) & 0xFF);
+      matrix.drawPixel(x, y, matrix.color565(r, g, b));
+    }
+  }
+
+  int16_t cx = static_cast<int16_t>((phase * 3U) % MATRIX_WIDTH);
+  int16_t cy = static_cast<int16_t>((phase * 2U) % MATRIX_HEIGHT);
+  matrix.drawLine(cx, 0, MATRIX_WIDTH - 1 - cx, MATRIX_HEIGHT - 1,
+                  matrix.color565(120, 120, 120));
+  if ((phase % 2U) == 0U) {
+    matrix.drawLine(0, cy, MATRIX_WIDTH - 1, MATRIX_HEIGHT - 1 - cy,
+                    matrix.color565(160, 120, 20));
+  }
+
+  matrix.show();
+  phase = static_cast<uint8_t>((phase + 1U) % 64U);
 }
 
 void renderFrameIfDue() {
   uint32_t now = millis();
+
+  if ((renderMode == RenderMode::Test || renderMode == RenderMode::Test2) &&
+      (now - testStartedMs) >= TEST_DURATION_MS) {
+    renderMode = RenderMode::Clear;
+    Serial.println("test complete (30s)");
+  }
+
   if ((now - lastFrameMs) < frameDelayMs) {
     return;
   }
@@ -243,6 +316,9 @@ void renderFrameIfDue() {
       break;
     case RenderMode::Test:
       renderTestPattern();
+      break;
+    case RenderMode::Test2:
+      renderTest2Pattern();
       break;
   }
 }
