@@ -141,6 +141,12 @@ Run test2 (wild mode):
 mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"test2"}'
 ```
 
+Run test3 (multicolor block sizes):
+
+```bash
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"test3"}'
+```
+
 ## Build
 
 Built with PlatformIO using:

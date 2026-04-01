@@ -42,7 +42,7 @@ Adafruit_Protomatter matrix(MATRIX_WIDTH, 4, 1, rgbPins, kNumAddrPins, addrPins,
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
-enum class RenderMode { ScrollLeft, ScrollRight, Clear, Test, Test2 };
+enum class RenderMode { ScrollLeft, ScrollRight, Clear, Test, Test2, Test3 };
 
 RenderMode renderMode = RenderMode::ScrollLeft;
 String currentText = "GIMLI";
@@ -120,6 +120,13 @@ void handleTextEvent(const JsonDocument& doc) {
     renderMode = RenderMode::Test2;
     testStartedMs = millis();
     Serial.println("test2");
+    return;
+  }
+
+  if (strcmp(event, "test3") == 0) {
+    renderMode = RenderMode::Test3;
+    testStartedMs = millis();
+    Serial.println("test3");
     return;
   }
 
@@ -290,10 +297,44 @@ void renderTest2Pattern() {
   phase = static_cast<uint8_t>((phase + 1U) % 64U);
 }
 
+void renderTest3Pattern() {
+  static uint8_t phase = 0;
+  matrix.fillScreen(0);
+
+  constexpr uint8_t kBlockCount = 12;
+  for (uint8_t i = 0; i < kBlockCount; ++i) {
+    uint8_t mix = static_cast<uint8_t>(phase * 13U + i * 29U);
+
+    int16_t w = static_cast<int16_t>(2 + (mix % 8));
+    int16_t h = static_cast<int16_t>(2 + ((mix / 3U) % 6));
+
+    int16_t maxX = static_cast<int16_t>(MATRIX_WIDTH - w);
+    int16_t maxY = static_cast<int16_t>(MATRIX_HEIGHT - h);
+    if (maxX < 0 || maxY < 0) {
+      continue;
+    }
+
+    int16_t x = static_cast<int16_t>((phase * 5U + i * 7U) %
+                                     static_cast<uint8_t>(maxX + 1));
+    int16_t y = static_cast<int16_t>((phase * 3U + i * 11U) %
+                                     static_cast<uint8_t>(maxY + 1));
+
+    uint8_t r = static_cast<uint8_t>((50U + mix * 3U) & 0xFF);
+    uint8_t g = static_cast<uint8_t>((120U + mix * 5U) & 0xFF);
+    uint8_t b = static_cast<uint8_t>((200U + mix * 7U) & 0xFF);
+
+    matrix.fillRect(x, y, w, h, matrix.color565(r, g, b));
+  }
+
+  matrix.show();
+  phase = static_cast<uint8_t>((phase + 1U) % 96U);
+}
+
 void renderFrameIfDue() {
   uint32_t now = millis();
 
-  if ((renderMode == RenderMode::Test || renderMode == RenderMode::Test2) &&
+  if ((renderMode == RenderMode::Test || renderMode == RenderMode::Test2 ||
+       renderMode == RenderMode::Test3) &&
       (now - testStartedMs) >= TEST_DURATION_MS) {
     renderMode = RenderMode::Clear;
     Serial.println("test complete (30s)");
@@ -319,6 +360,9 @@ void renderFrameIfDue() {
       break;
     case RenderMode::Test2:
       renderTest2Pattern();
+      break;
+    case RenderMode::Test3:
+      renderTest3Pattern();
       break;
   }
 }
