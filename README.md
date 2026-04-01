@@ -96,6 +96,45 @@ Planned additions:
 - Priority/interrupt behavior
 - Validation/default behavior for missing fields
 
+## MQTT Testing
+
+Subscribe and watch Gimli topic traffic:
+
+```bash
+mosquitto_sub -h mose.local -t "apps/gimli/text" -v
+```
+
+Send a basic render event:
+
+```bash
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"render_text","text":"HELLO FROM MAC","direction":"left","speed":30}'
+```
+
+Send right-to-left text:
+
+```bash
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"render_text","text":"RIGHT SCROLL","direction":"right","speed":30}'
+```
+
+Test faster/slower animation:
+
+```bash
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"render_text","text":"FAST","direction":"left","speed":12}'
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"render_text","text":"SLOW","direction":"left","speed":80}'
+```
+
+Clear the display:
+
+```bash
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"clear"}'
+```
+
+Run test pattern:
+
+```bash
+mosquitto_pub -h mose.local -t "apps/gimli/text" -m '{"event":"test"}'
+```
+
 ## Build
 
 Built with PlatformIO using:
