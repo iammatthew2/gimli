@@ -102,7 +102,6 @@ struct LiveBlock {
   int16_t w;
   int16_t h;
   uint16_t color;
-  bool active;
 };
 
 LiveBlock test3Blocks[TEST3_BLOCK_COUNT];
@@ -117,7 +116,6 @@ void initTest3Blocks() {
     test3Blocks[i].w = src.w;
     test3Blocks[i].h = src.h;
     test3Blocks[i].color = matrix.color565(src.r, src.g, src.b);
-    test3Blocks[i].active = true;
   }
 }
 
@@ -160,9 +158,6 @@ void updateTest3Physics() {
   if (test3Falling) {
     for (uint8_t i = 0; i < TEST3_BLOCK_COUNT; ++i) {
       LiveBlock& b = test3Blocks[i];
-      if (!b.active) {
-        continue;
-      }
 
       b.vx += ax * FALL_TILT_SCALE;
       b.vy += ay * FALL_TILT_SCALE + FALL_BASE_GRAVITY;
@@ -170,11 +165,6 @@ void updateTest3Physics() {
       b.vy *= FALL_DRAG;
       b.x += b.vx;
       b.y += b.vy;
-
-      if ((b.x + b.w) < 0.0F || b.x >= MATRIX_WIDTH || (b.y + b.h) < 0.0F ||
-          b.y >= MATRIX_HEIGHT) {
-        b.active = false;
-      }
     }
   }
 
@@ -431,10 +421,6 @@ void renderTest3Pattern() {
 
   for (uint8_t i = 0; i < TEST3_BLOCK_COUNT; ++i) {
     const LiveBlock& b = test3Blocks[i];
-    if (!b.active) {
-      continue;
-    }
-
     int16_t x = static_cast<int16_t>(b.x + 0.5F);
     int16_t y = static_cast<int16_t>(b.y + 0.5F);
     matrix.fillRect(x, y, b.w, b.h, b.color);
